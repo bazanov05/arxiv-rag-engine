@@ -1,3 +1,4 @@
+import 
 from dataclasses import dataclass
 import time
 import urllib.request
@@ -13,6 +14,7 @@ class ArxivPaper:
     categories: list[str]
     published_date: str
     normalized_abstract: str | None = None
+    base_embedding: list[float] | None = None
 
 
 def fetch_arxiv_papers(
