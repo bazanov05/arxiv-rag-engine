@@ -1,13 +1,9 @@
-CREATE EXTENSION IF NOT EXISTS vector;
-
-CREATE TABLE IF NOT EXISTS films (
-    film_id INT PRIMARY KEY,              
+CREATE TABLE papers (
+    paper_id VARCHAR(32) PRIMARY KEY,
     title TEXT NOT NULL,
-    genres JSONB,                         
-    keywords JSONB,                       
-    overview TEXT,                        
-    release_date DATE,                   
-    vote_average NUMERIC(3, 1) DEFAULT 0.0,
-    embedding vector(384),
-    embedding_finetuned vector(128)
+    abstract TEXT NOT NULL,
+    categories TEXT[] NOT NULL,
+    published_date DATE,
+    normalized_abstract TEXT,
+    base_embedding vector(768) 
 );
