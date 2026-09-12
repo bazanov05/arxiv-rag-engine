@@ -99,3 +99,39 @@ TEST(TfidfExtractorTest, HandlesEmptyDocuments) {
     EXPECT_TRUE(results[1].empty()); // "   " -> no keywords
     EXPECT_EQ(results[2].size(), 2); // "apple banana" -> 2 keywords
 }
+
+// --- IDF Map Tests ---
+
+TEST(TfidfExtractorTest, IdfMapContainsCorrectVocabulary) {
+    std::vector<std::string> corpus = {"apple banana", "apple orange"};
+    
+    TfidfKeywordExtractor extractor(corpus, 5);
+    auto idf_map = extractor.get_idf_map();
+    
+    // Total unique words > 2 chars: "apple", "banana", "orange"
+    EXPECT_EQ(idf_map.size(), 3);
+    EXPECT_TRUE(idf_map.find("apple") != idf_map.end());
+    EXPECT_TRUE(idf_map.find("banana") != idf_map.end());
+    EXPECT_TRUE(idf_map.find("orange") != idf_map.end());
+}
+
+TEST(TfidfExtractorTest, IdfMapCalculatesCorrectScores) {
+    std::vector<std::string> corpus = {
+        "common rare",
+        "common unique",
+        "common another"
+    };
+    
+    TfidfKeywordExtractor extractor(corpus, 5);
+    auto idf_map = extractor.get_idf_map();
+    
+    // N = 3 documents
+    // "common" appears in 3 docs. DF = 3. 
+    // IDF = ln((1 + 3) / (1 + 3)) + 1.0 = ln(1) + 1.0 = 1.0
+    EXPECT_DOUBLE_EQ(idf_map["common"], 1.0);
+    
+    // "rare" appears in 1 doc. DF = 1.
+    // IDF = ln((1 + 3) / (1 + 1)) + 1.0 = ln(4 / 2) + 1.0 = ln(2) + 1.0
+    double expected_rare_idf = std::log(4.0 / 2.0) + 1.0;
+    EXPECT_DOUBLE_EQ(idf_map["rare"], expected_rare_idf);
+}

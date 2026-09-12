@@ -7,10 +7,12 @@ namespace py = pybind11;
 // (compiled file, C++ obj)
 PYBIND11_MODULE(tfidf_python, m) {
     py::class_<TfidfKeywordExtractor>(m, "TfidfKeywordExtractor")
-        // Expose the constructor
-        .def(py::init<const std::vector<std::string>&, unsigned int>(),
+          // Expose the constructor
+          .def(py::init<const std::vector<std::string>&, unsigned int>(),
              py::arg("papers"), py::arg("top_k") = 5)
-        // Expose the keyword extraction method
-        .def("extract_keywords", &TfidfKeywordExtractor::extract_keywords,
-             "Extracts top-K TF-IDF keywords for the loaded papers");
+          // Expose the keyword extraction method
+          .def("extract_keywords", &TfidfKeywordExtractor::extract_keywords,
+             "Extracts top-K TF-IDF keywords for the loaded papers")
+          .def("get_idf_map", &TfidfKeywordExtractor::get_idf_map,
+          "Returns a dictionary of all vocabulary words and their computed IDF scores");
 }

@@ -21,19 +21,19 @@
  */
 class TfidfKeywordExtractor {
 private:
-    /// maximum number of keywords to extract per paper
+    /// Maximum number of keywords to extract per paper.
     unsigned int top_k;
 
-    /// in-memory corpus of paper texts (e.g., concatenated title and abstract).
+    /// In-memory corpus of paper texts (e.g., concatenated title and abstract).
     std::vector<std::string> papers;
 
-    /// global document frequency map mapping each term to the number of documents it appears in.
+    /// Global document frequency map mapping each term to the number of documents it appears in.
     std::unordered_map<std::string, int> doc_freq;
 
     /**
-     * @brief builds corpus-level document frequency (DF) statistics across all documents.
+     * @brief Builds corpus-level document frequency (DF) statistics across all documents.
      *
-     * iterates over all papers, tokenizes words separated by whitespace, normalizes
+     * Iterates over all papers, tokenizes words separated by whitespace, normalizes
      * characters to lowercase, filters tokens with length <= 2, and records each unique
      * term per document to update the global `doc_freq` mapping.
      */
@@ -59,4 +59,14 @@ public:
      *         the top keywords for the corresponding paper.
      */
     std::vector<std::vector<std::string>> extract_keywords(void) const;
+
+    /**
+     * @brief Computes and returns corpus-wide inverse document frequency (IDF) scores.
+     *
+     * Evaluates smooth IDF weights for all vocabulary terms identified during corpus
+     * ingestion using the formula ln((1 + N) / (1 + DF)) + 1.0.
+     *
+     * @return A hash map mapping each unique term to its smooth IDF weight.
+     */
+    std::unordered_map<std::string, double> get_idf_map(void) const;
 };

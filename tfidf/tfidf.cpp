@@ -107,3 +107,20 @@ std::vector<std::vector<std::string>> TfidfKeywordExtractor::extract_keywords(vo
 
     return all_keywords;
 }
+
+
+std::unordered_map<std::string, double> TfidfKeywordExtractor::get_idf_map(void) const{
+    std::unordered_map<std::string, double> idf_map;    // {word: idf_score}
+    idf_map.reserve(this->doc_freq.size());
+    
+    // num of papers
+    const double N = static_cast<double>(this->papers.size());
+    
+    for (const auto& it : this->doc_freq) {
+        // ratio of total papers to in how many papers word appears
+        double idf = std::log((1.0 + N) / (1.0 + it.second)) + 1.0;
+        idf_map[it.first] = idf;
+    }
+    
+    return idf_map;
+}
