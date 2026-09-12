@@ -1,168 +1,170 @@
-from torch.utils.data import Dataset
-from collections import defaultdict
 import numpy as np
 import torch
+from torch.utils.data import Dataset
+from collections import defaultdict
 
 
-class FilmPairDataset(Dataset):
+
+class PaperPairDataset(Dataset):
     """
-    A PyTorch Dataset that generates triplets of film embeddings for triplet loss training.
+    A PyTorch Dataset that prepares academic paper representations for contrastive metric learning.
 
-    Each sample consists of an anchor film, a positive film (sharing 2+ genres with anchor),
-    and a negative film (sharing fewer than 2 genres). Sampling follows a priority hierarchy:
+    This class coordinates graph-level paper relationships by combining continuous geometric
+    distances from base SPECTER2 embeddings with discrete lexical overlap derived from corpus-level
+    TF-IDF statistics. During initialization, it precalculates symmetric keyword overlap
+    scores across all papers using set intersections weighted by Inverse Document Frequency (IDF).
+    It partitions each paper's candidate pool into positive and negative sets using an empirical
+    threshold (2 * average IDF).
 
-    1. Semi-hard negative — positive is closer than negative to anchor, but not yet by the margin.
-       Provides the strongest learning signal without destabilizing early training.
-    2. Hard negative — negative is closer to anchor than positive. Used as fallback when
-       no semi-hard candidate exists.
-    3. Easy negative — random positive and negative pair. Weakest signal, used as last resort.
-
-    All embeddings and distances are loaded into memory at init time from precomputed
-    data structures, avoiding any database queries during training.
-
-    Args:
-        matrix_distances: Pairwise cosine distance matrix {film_id: {film_id: distance}}.
-        genres: Genre to film ID mapping {genre_name: [film_ids]}.
-        embeddings: Film ID to embedding vector mapping {film_id: [384 floats]}.
-        margin: Minimum required distance gap between positive and negative pairs.
-                Defaults to 0.2, consistent with the triplet loss margin.
+    During sample retrieval, the dataset dynamically mines triplets using a three-tier strategy:
+    1. Semi-hard triplets: Pairs where the negative candidate is farther from the anchor than the
+       positive candidate, but violates the margin constraint (d_pos < d_neg < d_pos + margin).
+    2. Hard triplets: Pairs where the negative candidate is strictly closer to the anchor than
+       the positive candidate (d_neg < d_pos).
+    3. Easy triplets: Randomly sampled positive and negative candidates when no harder alternatives
+       satisfy the geometric constraints.
     """
     def __init__(
             self, 
-            matrix_distances: dict[int, dict[int, float]], 
-            genres: dict[str, list[int]],
-            keywords: dict[str, list[int]],
-            embeddings: dict[int, list[float]],
+            matrix_distances: dict[str, dict[str, float]], 
+            embeddings: dict[str, list[float]],
+            idf_scores: dict[str, float],
+            avg_idf_score: float,
+            keywords: list[list[str]],
             margin: float = 0.2
         ):
+        """
+        Initializes the dataset, stores metadata, and builds positive and negative candidate pools.
+
+        Args:
+            matrix_distances: Nested dictionary representing pairwise geometric distances between paper embeddings,
+                              keyed by unique string ArXiv IDs.
+            embeddings: Dictionary mapping ArXiv IDs to their corresponding dense feature vectors.
+            idf_scores: Dictionary mapping individual vocabulary tokens to their smooth IDF weights.
+            avg_idf_score: The mean IDF weight across the vocabulary, used as a baseline scaling unit.
+            keywords: Two-dimensional list containing extracted top-K TF-IDF keywords for each paper.
+            margin: Margin value used to define boundary violations during semi-hard triplet mining.
+
+        Returns:
+            None
+        """
         super().__init__()
 
         self._matrix_distances = matrix_distances
-        self._genres = genres
-        self._keywords = keywords
         self._embeddings = embeddings
+        self._idf_scores = idf_scores           # dict - word: idf_score
+        self._avg_idf_score = avg_idf_score     # avg idf score across all words in all papers
+        self._keywords = keywords               # matrix of num_of_papers X top_k_words
 
         # distance between pos and anchor should be smaller than distance between neg and anchor
         # at least by margin
         self._margin = margin
 
-        # DataLoader will give indices in range [0, 4802], cause we have 4803 films
-        # but film_ids are not in this range - there are gaps
-        # so we need to map those indices to real film_ids
-        self._films_ids = list(embeddings.keys())
+        # DataLoader will give indices in range [0, N-1], cause we have N papers
+        # but paper_ids are not in this range - there are specialized strings
+        # so we need to map those indices to real paper_ids
+        self._paper_ids = list(embeddings.keys())
 
         similarity_scores = self._compute_similarity_scores()
         self._positives, self._negatives = self._build_candidate_lists(scores=similarity_scores)
 
-    def _compute_similarity_scores(self) -> dict[int, dict[int, int]]:
+    def _compute_similarity_scores(self) -> dict[str, dict[str, float]]:
         """
-        Precomputes weighted similarity scores for every pair of films.
+        Calculates symmetric pairwise keyword similarity scores for all document combinations in the corpus.
 
-        Builds inverted indexes mapping each film to its genre and keyword sets,
-        then computes a weighted score for every pair using set intersection.
-        Genres are weighted higher than keywords as they are a stronger categorical signal.
+        Converts keyword lists into sets for constant-time lookups and leverages symmetry to compute
+        only the upper triangular index pairs before reflecting values across the diagonal.
 
-        Score formula: (2.0 * shared_genres) + (1.0 * shared_keywords)
+        Args:
+            None
 
         Returns:
-            A nested dictionary mapping each film_id to a dict of all other film_ids
-            and their similarity scores. Example: {1: {2: 5, 3: 1, ...}, ...}
+            dict[str, dict[str, float]]: Nested mapping where keys are ArXiv IDs and inner dictionaries
+            contain the IDF-weighted intersection score against other papers.
         """
-        # for each film_id find it's genres, build a dict - film_id: set of genres
-        film_genres: dict[int, set[str]] = defaultdict(set)
+        similarity_scores: dict[str, dict[str, float]] = dict()
 
-        for genre, ids in self._genres.items():
-            for film_id in ids:
-                film_genres[film_id].add(genre)
+        # replace every list with set for fast intersections checks
+        for i, keywords_per_paper in enumerate(self._keywords):
+            self._keywords[i] = set(keywords_per_paper)
 
-        # for each film find it's keywords
-        film_keywords: dict[int, set[str]] = defaultdict(set)
+        for i, id1 in enumerate(self._paper_ids):
+            # check if id1 has never been processed before
+            if id1 not in similarity_scores:
+                similarity_scores[id1] = {}
+            id1_keywords = self._keywords[i]
 
-        for keyword, ids in self._keywords.items():
-            for film_id in ids:
-                film_keywords[film_id].add(keyword)
+            for j in range(i+1, len(self._paper_ids)):
+                id2_keywords = self._keywords[j]
+                id2 = self._paper_ids[j]
 
-        # create dict of scores for each pair of ids
-        scores: dict[int, dict[int, float]] = {}
+                if id2 not in similarity_scores:
+                    similarity_scores[id2] = {}
+                
+                # get intersection of two sets
+                words_in_common = id1_keywords & id2_keywords
+                # score is just the same of ids scores of words in common
+                score = sum(self._idf_scores[word] for word in words_in_common)
 
-        for id1 in self._films_ids:
-            scores[id1] = {}
-            for id2 in self._films_ids:
-                if id1 != id2:
-                    # find how many genres and keywords those films have in common
-                    genre_similarity = len(film_genres[id1] & film_genres[id2])
-                    keyword_similarity = len(film_keywords[id1] & film_keywords[id2])
-
-                    # calculate the weighted score, genre has weight 2.0, keyword 1.0
-                    score = (genre_similarity * 1.5) + (keyword_similarity * 1.0)
-                    scores[id1][id2] = score
-
-        return scores
+                similarity_scores[id1][id2] = score
+                similarity_scores[id2][id1] = score
+            
+        return similarity_scores
 
     def _build_candidate_lists(
             self, 
-            scores: dict[int, dict[int, int]]
-        ) -> tuple[dict[int, list[int]], dict[int, list[int]]]:
+            scores: dict[str, dict[str, float]]
+        ) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
         """
-        Splits all film pairs into positive and negative candidate lists based on similarity score.
+        Partitions candidate papers into positive and negative sets based on an IDF-scaled threshold.
 
-        A film is a positive candidate if its weighted similarity score with the anchor
-        is 4 or above — equivalent to sharing 2 genres, or 1 genre and 2 keywords.
-        All other films are treated as negative candidates.
+        Separates candidates by evaluating whether the shared keyword score meets or exceeds twice
+        the corpus average IDF score (2 * avg_idf_score).
 
         Args:
-            scores: Precomputed similarity scores from _compute_similarity_scores.
+            scores: Nested dictionary containing pairwise IDF intersection scores between all papers.
 
         Returns:
-            A tuple of (positives, negatives), each a dict mapping film_id to a list
-            of candidate film_ids. Example: {1: [5, 23, 104], ...}
+            tuple[dict[str, list[str]], dict[str, list[str]]]: A two-element tuple consisting of:
+            - positives: Dictionary mapping each ArXiv ID to candidate IDs meeting the positive threshold.
+            - negatives: Dictionary mapping each ArXiv ID to candidate IDs falling below the threshold.
         """
         # build positive and negative candidates
         positives = defaultdict(list)
         negatives = defaultdict(list)
 
-        for id1 in self._films_ids:
-            # sort by metadata score (descending)
-            sorted_candidates = sorted(
-                [(id2, scores[id1][id2]) for id2 in self._films_ids if id2 != id1],
-                key=lambda x: x[1],
-                reverse=True
-            )
-
-            for id2, score in sorted_candidates:
-                if score >= 6:
+        for id1 in scores.keys():
+            for id2, score in scores[id1].items():
+                if score >= 2 * self._avg_idf_score:
                     positives[id1].append(id2)
-                elif score < 6:
+                else:
                     negatives[id1].append(id2)
-
-            # cut lists max to 30 candidates to extract noise 
-            positives[id1] = positives[id1][:30]
-            negatives[id1] = negatives[id1][:30]
 
         return positives, negatives
 
     def _sample_triplet(self, index: int) -> tuple[list[float], list[float] | None, list[float] | None]:
         """
-        Samples a triplet of embeddings for the film at the given index.
+        Extracts a single triplet sample (anchor, positive, negative) according to margin difficulty constraints.
 
-        Applies a sampling hierarchy to find the most informative triplet:
-        1. Semi-hard: d_pos < d_neg < d_pos + margin. Best learning signal.
-        2. Hard: d_neg < d_pos. Strong signal, used as fallback.
-        3. Easy: random positive and negative. Weakest signal, last resort.
+        Iterates over randomly shuffled positive and negative candidate pools. Prioritizes semi-hard
+        negatives, falls back to the most violated hard negative pairs, and finally resorts to uniform
+        random selection if no constrained boundaries are violated.
 
         Args:
-            index: DataLoader's sequential index mapped to a real film_id.
+            index: Integer index referencing the anchor paper inside the internal index map.
 
         Returns:
-            A tuple of (anchor, positive, negative) embedding vectors.
-            Positive and negative are None if no valid candidates exist.
+            tuple[list[float], list[float] | None, list[float] | None]: A three-element tuple consisting of:
+            - anchor: Embedding vector for the target document.
+            - positive: Selected positive embedding vector, or None if candidate pools are empty.
+            - negative: Selected negative embedding vector, or None if candidate pools are empty.
         """
-        film_id = self._films_ids[index]    # map index to film_id 
-        anchor = self._embeddings[film_id]
+        paper_id = self._paper_ids[index]
+        anchor = self._embeddings[paper_id]
 
         # get positive and negative candidates for anchor
-        positives = self._positives[film_id]
-        negatives = self._negatives[film_id]
+        positives = self._positives[paper_id]
+        negatives = self._negatives[paper_id]
 
         # if anchor is lack of some candidates - return Nones
         if not positives or not negatives:
@@ -181,8 +183,8 @@ class FilmPairDataset(Dataset):
             for negative_id in negatives:
                 negative = self._embeddings[negative_id]
 
-                d_pos = self._matrix_distances[film_id][positive_id]
-                d_neg = self._matrix_distances[film_id][negative_id]
+                d_pos = self._matrix_distances[paper_id][positive_id]
+                d_neg = self._matrix_distances[paper_id][negative_id]
 
                 # semi-hard logic: d_pos is smaller than d_neg but not by margin
                 if d_pos < d_neg and d_neg < d_pos + self._margin:
@@ -207,46 +209,56 @@ class FilmPairDataset(Dataset):
         return anchor, positive, negative
 
     def __len__(self):
-        """Returns the total number of films in the dataset."""
+        """
+        Reports the total number of paper entities available in the dataset.
+
+        Args:
+            None.
+
+        Returns:
+            int: Number of items contained in the embeddings collection.
+        """
         return len(self._embeddings)
 
     def __getitem__(self, index) -> tuple[list[float], list[float] | None, list[float] | None]:
         """
-        Returns a sampled triplet for the given index.
-
-        Delegates to _sample_triplet. Called by DataLoader on every batch iteration.
+        Coordinates batch retrieval by routing integer index requests to the triplet sampling pipeline.
 
         Args:
-            index: Sequential index provided by DataLoader in range [0, len(dataset) - 1].
+            index: Sequential index provided by the PyTorch DataLoader.
 
         Returns:
-            A tuple of (anchor, positive, negative) embedding vectors.
+            tuple[list[float], list[float] | None, list[float] | None]: Triplet tuple containing the anchor vector,
+            selected positive vector (or None), and selected negative vector (or None).
         """
         return self._sample_triplet(index=index)
 
 
 def custom_collate_fn(triplets: list[tuple[list[float], list[float] | None, list[float] | None]]) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """
-    Custom DataLoader collate function that filters invalid triplets and stacks valid ones into tensors.
+    Collates raw triplet samples into PyTorch batch tensors while filtering degenerate cases.
 
-    Replaces DataLoader's default collate which crashes on None values. Filters out any
-    triplets where positive or negative is None — cases where FilmPairDataset found no
-    valid candidates for an anchor. Stacks remaining valid triplets into three batched tensors.
+    Examines incoming samples to drop any records where mining could not find a valid positive
+    or negative embedding candidate. Converts surviving vectors into stacked tensors or returns
+    dimensionally consistent empty tensors if no valid samples remain.
 
     Args:
-        triplets: A list of raw samples from FilmPairDataset.__getitem__, each a tuple of
-                  (anchor, positive, negative) where positive and negative may be None.
+        triplets: List of raw sample tuples produced by PaperPairDataset.__getitem__, where positive
+                  and negative components may contain None values.
 
     Returns:
-        A tuple of (anchors, positives, negatives) tensors each of shape (batch_size, 384).
-        Returns three empty tensors of shape (0, 384) if no valid triplets exist in the batch.
+        tuple[torch.Tensor, torch.Tensor, torch.Tensor]: A three-element tuple of tensors:
+        - anchors: Tensor of shape (batch_size, 768) containing anchor embeddings.
+        - positives: Tensor of shape (batch_size, 768) containing positive candidate embeddings.
+        - negatives: Tensor of shape (batch_size, 768) containing negative candidate embeddings.
+        If no valid triplets exist, returns three empty tensors of shape (0, 768).
     """
     # clean triplet - delete those where positive and negative where not found
     cleaned_triplets = [triplet for triplet in triplets if triplet[1] is not None and triplet[2] is not None]
 
     # if no triplets are left after the clean - return 3 empty tensors
     if not cleaned_triplets:
-        return torch.empty(0, 384), torch.empty(0, 384), torch.empty(0, 384)
+        return torch.empty(0, 768), torch.empty(0, 768), torch.empty(0, 768)
 
     # otherwise return 3 tensors: anchors, positives and negatives 
     anchors = torch.tensor(data=[triplet[0] for triplet in cleaned_triplets])

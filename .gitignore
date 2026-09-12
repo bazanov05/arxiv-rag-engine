@@ -12,3 +12,4 @@ build/
 *.so
 *.pt
 *.txt
+!CMakeLists.txt

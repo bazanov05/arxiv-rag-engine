@@ -1,4 +1,3 @@
-import 
 from dataclasses import dataclass
 import time
 import urllib.request
