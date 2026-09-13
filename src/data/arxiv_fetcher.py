@@ -14,6 +14,7 @@ class ArxivPaper:
     published_date: str
     normalized_abstract: str | None = None
     base_embedding: list[float] | None = None
+    keywords: list[str] | None = None
 
 
 def fetch_arxiv_papers(

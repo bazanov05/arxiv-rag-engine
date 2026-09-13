@@ -20,16 +20,13 @@ def load_data_to_db(conn, papers: list[ArxivPaper]) -> None:
         papers (list[ArxivPaper]): A list of populated ArxivPaper dataclass instances.
     """
     copy_query = """
-        COPY papers (paper_id, title, abstract, categories, published_date, normalized_abstract, base_embedding) 
+        COPY papers (paper_id, title, abstract, categories, published_date, normalized_abstract, base_embedding, keywords) 
         FROM STDIN
     """
 
     with conn.cursor() as cursor:
         with cursor.copy(copy_query) as copy:
             for paper in papers:
-                # format categories list for Postgres TEXT[] -> '{cs.LG,cs.AI}'
-                pg_categories = "{" + ",".join(paper.categories) + "}"
-                
                 # safely cast vector to string, or keep as None for SQL NULL
                 pg_embedding = str(paper.base_embedding) if paper.base_embedding else None
                 
@@ -38,10 +35,11 @@ def load_data_to_db(conn, papers: list[ArxivPaper]) -> None:
                         paper.paper_id,
                         paper.title,
                         paper.abstract,
-                        pg_categories,
+                        paper.categories,
                         paper.published_date,
                         paper.normalized_abstract,
-                        pg_embedding
+                        pg_embedding,
+                        paper.keywords
                     )
                 )
     
@@ -123,7 +121,7 @@ def create_index(
     conn.commit()
 
 
-def build_distance_matrix(conn, column: str = "base_embedding") -> dict[int, dict[int, float]]:
+def build_distance_matrix(conn, column: str = "base_embedding") -> dict[str, dict[int, float]]:
     """
     Builds an in-memory pairwise cosine distance matrix for all papers.
 
@@ -183,7 +181,7 @@ def build_distance_matrix(conn, column: str = "base_embedding") -> dict[int, dic
         return distance_matrix
 
 
-def fetch_papers_embeddings(conn, column: str = "base_embedding") -> dict[int, list[float]]:
+def fetch_papers_embeddings(conn, column: str = "base_embedding") -> dict[str, list[float]]:
     """
     Retrieves all non-null paper embeddings from the database.
 
@@ -215,3 +213,58 @@ def fetch_papers_embeddings(conn, column: str = "base_embedding") -> dict[int, l
                 embeddings_dict[row["paper_id"]] = list(raw_vec)
 
         return embeddings_dict
+
+
+def save_idf_scores(conn, idf_scores: dict[str, float]) -> None:
+    """
+    Bulk inserts vocabulary IDF scores into the PostgreSQL 'idf_scores' table.
+
+    Uses the PostgreSQL COPY FROM STDIN protocol via psycopg for fast bulk insertion.
+
+    Args:
+        conn: An active psycopg database connection object.
+        idf_scores: Dictionary mapping vocabulary words to their IDF weights.
+
+    Returns:
+        None.
+    """
+    copy_query = """
+        COPY idf_scores (word, idf_score) 
+        FROM STDIN
+    """
+    with conn.cursor() as cursor:
+        with cursor.copy(copy_query) as copy:
+            for word, score in idf_scores.items():
+                copy.write_row((word, score))
+
+    conn.commit()
+
+
+def fetch_idf_scores(conn) -> dict[str, float]:
+    """
+    Retrieves all vocabulary words and their corresponding IDF weights from the database.
+
+    Args:
+        conn: An active psycopg database connection object.
+
+    Returns:
+        Dictionary mapping vocabulary terms to their stored IDF scores.
+    """
+    with conn.cursor() as cursor:
+        cursor.execute("SELECT word, idf_score FROM idf_scores;")
+        return {row[0]: float(row[1]) for row in cursor.fetchall()}
+
+
+def fetch_paper_keywords(conn) -> list[list[str]]:
+    """
+    Fetches extracted keyword lists for all papers ordered by paper_id.
+
+    Args:
+        conn: An active psycopg database connection object.
+
+    Returns:
+        List of keyword lists corresponding to papers ordered by paper_id.
+    """
+    with conn.cursor() as cursor:
+        cursor.execute("SELECT keywords FROM papers ORDER BY paper_id ASC;")
+        return [row[0] if row[0] is not None else [] for row in cursor.fetchall()]
