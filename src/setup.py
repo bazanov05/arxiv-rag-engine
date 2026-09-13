@@ -1,7 +1,8 @@
 from src.data.loader import (
     init_db, 
     load_data_to_db,
-    save_idf_scores
+    save_idf_scores,
+    create_index
 )
 from src.data.arxiv_fetcher import fetch_arxiv_papers, ArxivPaper
 from src.db import connection
@@ -47,11 +48,11 @@ def setup():
     # clean every abstract and title
     for paper in arxiv_papers:
         paper.normalized_abstract = normalizer.clean(paper.abstract)
-        paper.title = normalizer.clean(paper.title)
+        paper.normalized_title = normalizer.clean(paper.title)
         
 
     # batch generate 768-dim base embeddings (Title + Abstract)
-    texts_to_embed = [f"{p.title} {p.normalized_abstract}" for p in arxiv_papers]
+    texts_to_embed = [f"{p.normalized_title} {p.normalized_abstract}" for p in arxiv_papers]
     embedder = PaperEmbedder()
     embeddings: list[list[float]] = embedder.generate_embeddings(texts=texts_to_embed)
 
@@ -76,6 +77,7 @@ def setup():
         init_db(conn=conn, schema_path=PATH_TO_SQL_SCHEMA)
         load_data_to_db(conn=conn, papers=arxiv_papers)
         save_idf_scores(conn=conn, idf_scores=idf_scores)
+        create_index(conn=conn)
 
     connection.close_pool()
 
