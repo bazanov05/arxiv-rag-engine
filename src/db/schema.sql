@@ -1,8 +1,9 @@
 CREATE EXTENSION IF NOT EXISTS vector;
 
 CREATE TABLE IF NOT EXISTS papers (
-    paper_id VARCHAR(32) PRIMARY KEY,
+    paper_id VARCHAR(64) PRIMARY KEY,
     title TEXT NOT NULL,
+    normalized_title TEXT,
     abstract TEXT NOT NULL,
     categories TEXT[] NOT NULL,
     published_date DATE,

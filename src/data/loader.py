@@ -20,7 +20,7 @@ def load_data_to_db(conn, papers: list[ArxivPaper]) -> None:
         papers (list[ArxivPaper]): A list of populated ArxivPaper dataclass instances.
     """
     copy_query = """
-        COPY papers (paper_id, title, abstract, categories, published_date, normalized_abstract, base_embedding, keywords) 
+        COPY papers (paper_id, title, normalized_title, abstract, categories, published_date, normalized_abstract, base_embedding, keywords) 
         FROM STDIN
     """
 
@@ -34,6 +34,7 @@ def load_data_to_db(conn, papers: list[ArxivPaper]) -> None:
                     (
                         paper.paper_id,
                         paper.title,
+                        paper.normalized_title,
                         paper.abstract,
                         paper.categories,
                         paper.published_date,
