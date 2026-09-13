@@ -1,115 +1,73 @@
 from dataclasses import dataclass
-import time
-import urllib.request
-import xml.etree.ElementTree as ET
+from datasets import load_dataset
 
 
 @dataclass
 class ArxivPaper:
-    """Represents a research paper fetched from the ArXiv API."""
+    """Represents a research paper fetched for downstream ingestion."""
     paper_id: str
     title: str
     abstract: str
     categories: list[str]
     published_date: str
+    normalized_title: str | None = None
     normalized_abstract: str | None = None
     base_embedding: list[float] | None = None
     keywords: list[str] | None = None
 
 
 def fetch_arxiv_papers(
-    search_query: str = "cat:cs.LG+OR+cat:cs.CL+OR+cat:cs.AI",
+    search_query: str = "machine_learning",
     total_papers: int = 4000,
-    batch_size: int = 500,
+    batch_size: int = 100,
 ) -> list[ArxivPaper]:
-    """
-    Fetches research papers from the ArXiv API with automatic pagination and rate-limiting.
+    print(f"Starting ingestion: streaming {total_papers} papers from Hugging Face...")
 
-    Args:
-        search_query: ArXiv search query. Formatted with + instead of spaces. 
-                      Defaults to Machine Learning (cs.LG), NLP (cs.CL), and AI (cs.AI).
-        total_papers: Total number of papers to retrieve.
-        batch_size: Number of records to fetch per HTTP request (ArXiv recommends <= 1000).
+    dataset = load_dataset("gfissore/arxiv-abstracts-2021", split="train", streaming=True)
 
-    Returns:
-        A list of ArxivPaper instances.
-    """
-    base_url = "http://export.arxiv.org/api/query?"
-    ns = {"atom": "http://www.w3.org/2005/Atom"}
     papers: list[ArxivPaper] = []
+    target_categories = {"cs.LG", "cs.CL", "cs.AI", "cs.CV", "stat.ML"}
 
-    print(f"Starting ingestion: fetching {total_papers} papers matching '{search_query}'...")
+    for item in dataset:
+        title = " ".join(item.get("title", "").split())
+        abstract = " ".join(item.get("abstract", "").split())
+        paper_id = str(item.get("id", item.get("paper_id", "")))
 
-    for start_idx in range(0, total_papers, batch_size):
-        current_batch_size = min(batch_size, total_papers - start_idx)
+        if not title or not abstract or not paper_id:
+            continue
 
-        # build query manually to avoid urlencode escaping the '+' signs
-        # which ArXiv uses as spaces in its query syntax.
-        query_string = (
-            f"search_query={search_query}"
-            f"&start={start_idx}"
-            f"&max_results={current_batch_size}"
-            f"&sortBy=submittedDate"
-            f"&sortOrder=descending"
-        )
-        url = base_url + query_string
+        raw_cats = item.get("categories", "")
+        if isinstance(raw_cats, str):
+            cats = raw_cats.split()
+        elif isinstance(raw_cats, list):
+            cats = raw_cats
+        else:
+            cats = []
 
-        try:
-            req = urllib.request.Request(
-                url, 
-                headers={"User-Agent": "SemanticResearchAssistant/1.0 (academic research)"}
+        # Keep paper if any category intersects target categories (or if categories empty)
+        if cats and not any(cat in target_categories for cat in cats):
+            continue
+
+        # Extract date safely
+        pub_date = item.get("update_date") or item.get("published") or "2024-01-01"
+        if len(str(pub_date)) == 4:
+            pub_date = f"{pub_date}-01-01"
+
+        papers.append(
+            ArxivPaper(
+                paper_id=paper_id,
+                title=title,
+                abstract=abstract,
+                categories=cats if cats else ["cs.AI"],
+                published_date=str(pub_date)[:10],
             )
-            with urllib.request.urlopen(req) as response:
-                xml_data = response.read()
+        )
 
-            root = ET.fromstring(xml_data)
-            entries = root.findall("atom:entry", ns)
+        if len(papers) % 500 == 0 and len(papers) > 0:
+            print(f"Loaded {len(papers)} / {total_papers} papers...")
 
-            if not entries:
-                print(f"No more records returned at index {start_idx}. Stopping.")
-                break
-
-            for entry in entries:
-                # ArXiv ID format: 'http://arxiv.org/abs/2305.12345v1' -> '2305.12345'
-                raw_id = entry.find("atom:id", ns).text.strip()
-                paper_id = raw_id.split("/abs/")[-1].split("v")[0]
-
-                title_elem = entry.find("atom:title", ns)
-                title = " ".join(title_elem.text.split()) if title_elem is not None else ""
-
-                summary_elem = entry.find("atom:summary", ns)
-                abstract = " ".join(summary_elem.text.split()) if summary_elem is not None else ""
-
-                pub_elem = entry.find("atom:published", ns)
-                published_date = pub_elem.text.strip() if pub_elem is not None else ""
-
-                categories = [
-                    cat.attrib["term"]
-                    for cat in entry.findall("atom:category", ns)
-                    if "term" in cat.attrib
-                ]
-
-                # Ensure paper has an abstract and categories before adding
-                if abstract and categories:
-                    papers.append(
-                        ArxivPaper(
-                            paper_id=paper_id,
-                            title=title,
-                            abstract=abstract,
-                            categories=categories,
-                            published_date=published_date,
-                        )
-                    )
-
-            print(f"Fetched {len(papers)} / {total_papers} papers...")
-
-        except Exception as e:
-            print(f"Error fetching batch at start={start_idx}: {e}")
+        if len(papers) >= total_papers:
             break
-
-        # Respect ArXiv's API usage guidelines (at least 3 seconds between calls)
-        if start_idx + batch_size < total_papers:
-            time.sleep(3)
 
     print(f"Ingestion complete: retrieved {len(papers)} valid papers.")
     return papers
