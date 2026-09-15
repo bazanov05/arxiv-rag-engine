@@ -135,7 +135,7 @@ class PaperPairDataset(Dataset):
 
         for id1 in scores.keys():
             for id2, score in scores[id1].items():
-                if score >= 2 * self._avg_idf_score:
+                if score >= 1.75 * self._avg_idf_score:
                     positives[id1].append(id2)
                 else:
                     negatives[id1].append(id2)
@@ -232,6 +232,18 @@ class PaperPairDataset(Dataset):
             selected positive vector (or None), and selected negative vector (or None).
         """
         return self._sample_triplet(index=index)
+
+    def get_paper_id(self, index: int) -> str:
+        """Returns the paper_id string corresponding to an integer index."""
+        return self._paper_ids[index]
+
+    def get_positives(self, paper_id: str) -> list[str]:
+        """Returns the list of ground-truth positive IDs for a given paper_id."""
+        return self._positives.get(paper_id, [])
+        
+    def get_embedding(self, paper_id: str) -> list[float]:
+        """Returns the raw base embedding for a given paper_id."""
+        return self._embeddings[paper_id]
 
 
 def custom_collate_fn(triplets: list[tuple[list[float], list[float] | None, list[float] | None]]) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
