@@ -79,20 +79,3 @@ class PaperEncoder(nn.Module):
         torch.save({
             "projection_state_dict": self._projection.state_dict(),
         }, path)
-
-    @classmethod
-    def load(cls, path: str, projection_dim: int = 128) -> "PaperEncoder":
-        """
-        Loads a PaperEncoder from a saved projection head checkpoint.
-
-        Args:
-            path: File path to the saved checkpoint produced by save().
-            projection_dim: Target output dimension matching the checkpoint weights.
-
-        Returns:
-            A fully initialized PaperEncoder with trained projection weights loaded.
-        """
-        new_instance = cls(projection_dim=projection_dim)
-        checkpoint = torch.load(path, map_location=new_instance._device, weights_only=True)
-        new_instance._projection.load_state_dict(checkpoint["projection_state_dict"])
-        return new_instance
