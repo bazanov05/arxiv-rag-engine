@@ -5,11 +5,12 @@ services:
     environment:
       POSTGRES_USER: ${DB_USER}
       POSTGRES_PASSWORD: ${DB_PASSWORD}
-      POSTGRES_DB: ${DB_NAME}    # need .env variables to create container from image 
+      POSTGRES_DB: ${DB_NAME}
     ports:
-      - "5432:5432"   # runs on port 5432
+      - "5432:5432"
     volumes:
-      - postgres_data:/var/lib/postgresql/data  # bridge ssd : temporary inside linux virtual machine inside container 
+      - semantic-movie-engine_postgres_data:/var/lib/postgresql/data
 
 volumes:
-  postgres_data:
+  semantic-movie-engine_postgres_data:
+    external: true
