@@ -1,4 +1,3 @@
-import pandas as pd
 import numpy as np
 import json
 import math
@@ -269,3 +268,51 @@ def fetch_paper_keywords(conn) -> list[list[str]]:
     with conn.cursor() as cursor:
         cursor.execute("SELECT keywords FROM papers ORDER BY paper_id ASC;")
         return [row[0] if row[0] is not None else [] for row in cursor.fetchall()]
+
+
+def retrieve_top_k_papers(
+    conn, 
+    query_vector: list[float], 
+    k: int = 5, 
+    column: str = "finetuned_embedding"
+) -> list[dict]:
+    """
+    Retrieves the top-k most semantically relevant papers using vector cosine distance.
+
+    Args:
+        conn: An active psycopg database connection object.
+        query_vector: 256-dimensional L2-normalized embedding of the user's query.
+        k: Number of nearest neighbors to return.
+        column: The database vector column to compare against.
+
+    Returns:
+        List of dictionaries containing paper metadata and similarity scores.
+    """
+    query = f"""
+        SELECT 
+            paper_id, 
+            title, 
+            abstract, 
+            categories,
+            published_date,
+            1 - ({column} <=> %s::vector) AS cosine_similarity
+        FROM papers
+        WHERE {column} IS NOT NULL
+        ORDER BY {column} <=> %s::vector ASC
+        LIMIT %s;
+    """
+    with conn.cursor() as cursor:
+        cursor.execute(query, (str(query_vector), str(query_vector), k))
+        rows = cursor.fetchall()
+
+    return [
+        {
+            "paper_id": r[0],
+            "title": r[1],
+            "abstract": r[2],
+            "categories": r[3],
+            "published_date": r[4],
+            "cosine_similarity": float(r[5])
+        }
+        for r in rows
+    ]
