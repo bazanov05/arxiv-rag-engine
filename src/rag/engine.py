@@ -1,12 +1,11 @@
-from psycopg_pool import ConnectionPool
-from google import genai
-from dotenv import load_dotenv
 import os
+from dotenv import load_dotenv
+from google import genai
+from psycopg_pool import ConnectionPool
 
 from normalizer_python import TextNormalizer
 from src.model.encoder import PaperEncoder
 from src.data.loader import retrieve_top_k_papers
-
 
 load_dotenv()
 
@@ -32,7 +31,7 @@ class RAGEngine():
             normalizer (TextNormalizer): A C++ accelerated preprocessor instance for cleaning text.
             encoder (PaperEncoder): PyTorch model used to project text into 256-dimensional embeddings.
             model_name (str, optional): Target Gemini model identifier used for response generation.
-                Defaults to 'gemini-2.5-flash'.
+                Defaults to 'gemini-3.6-flash'.
 
         Raises:
             ValueError: If the `GEMINI_API_KEY` environment variable is not defined or is empty.
@@ -48,6 +47,11 @@ class RAGEngine():
 
         self._client = genai.Client(api_key=api_key.strip())
         self._model_name = model_name
+        
+        # agent state tracking (Required for the SDK tool loop)
+        self._search_attempts: int = 0
+        self._current_k: int = 5
+        self._last_papers: list[dict] = []
         
     def _format_prompt(self, user_query: str, retrieved_papers: list[dict]) -> str:
         """Formats the user query and retrieved papers into a structured prompt for the LLM.
@@ -145,6 +149,33 @@ class RAGEngine():
 
         return top_k_papers
 
+    def _agent_search(self, search_query: str) -> str:
+        """Searches the ArXiv database for academic papers.
+        
+        If the search results are irrelevant or empty, you can call this tool again 
+        with a reformulated, broader, or more specific query.
+        """
+        self._search_attempts += 1
+        
+        if self._search_attempts > 3:
+            return (
+                "SYSTEM OVERRIDE: Maximum search limit (3) reached. "
+                "You are forbidden from searching again. Answer the user's question "
+                "using ONLY the information you have gathered so far. If you still "
+                "lack the info, state exactly what is missing."
+            )
+
+        print(f"  [Agent] Searching DB for: '{search_query}' (Attempt {self._search_attempts}/3)")
+        
+        # run your existing retrieval
+        papers = self._retrieve(query=search_query, k=self._current_k)
+        
+        # save papers for CLI `/sources` command
+        self._last_papers = papers 
+        
+        # format the results and hand them back to the LLM
+        return self._format_prompt(user_query=search_query, retrieved_papers=papers)
+
     def query(self, query_text: str, k: int = 5) -> tuple[str, list[dict]]:
         """Processes an end-to-end question answering request through the RAG pipeline.
 
@@ -157,14 +188,30 @@ class RAGEngine():
                 Defaults to 5.
 
         Returns:
-            str: The LLM-generated plain text response, complete with citations.
+            tuple[str, list[dict]]: The LLM-generated plain text response with citations, 
+                and the list of retrieved papers.
         """
-        top_k_papers = self._retrieve(query=query_text, k=k)
-        final_prompt = self._format_prompt(user_query=query_text, retrieved_papers=top_k_papers)
+        # stash the state so the SDK tool (_agent_search) can access it
+        self._search_attempts = 0
+        self._current_k = k
+        self._last_papers = []
 
-        response = self._client.models.generate_content(
+        # start an autonomous chat session
+        chat = self._client.chats.create(
             model=self._model_name,
-            contents=final_prompt,
+            config=dict(
+                tools=[self._agent_search],
+                system_instruction=(
+                    "You are an autonomous research agent. If the user asks a question, "
+                    "use your _agent_search tool to find papers. If the returned papers do not "
+                    "answer the question, REWRITE the query using different keywords and "
+                    "search again. Provide a final cited answer once you have good data."
+                ),
+                temperature=0.1
+            )
         )
 
-        return (response.text or "", top_k_papers)
+        response = chat.send_message(query_text)
+
+        # return the LLM's text and the papers we stashed during the tool call
+        return (response.text or "", self._last_papers)
