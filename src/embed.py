@@ -21,7 +21,7 @@ def update_finetuned_embeddings(conn, embeddings_dict: dict[str, list[float]], d
         embeddings_dict (dict[str, list[float]]): Mapping of paper_id to projected vector floats.
         dim (int): Dimensionality of the target vector representation (e.g., 256).
     """
-    create_query = f"ALTER TABLE papers ADD COLUMN finetuned_embedding vector({dim});"
+    create_query = f"ALTER TABLE papers ADD COLUMN IF NOT EXISTS finetuned_embedding vector({dim});"
     update_query = "UPDATE papers SET finetuned_embedding = %s WHERE paper_id = %s"
     
     with conn.cursor() as cursor:
@@ -46,6 +46,28 @@ def embed() -> None:
         FileNotFoundError: If the projection weights checkpoint cannot be found at WEIGHTS_PATH.
         ValueError: If no base embeddings are present in the database to project.
     """
+    connection.init_pool()
+
+    # guard check: see if column exists and already has embeddings
+    with connection.pool.connection() as conn:
+        with conn.cursor() as cur:
+            # verify if column exists before checking contents
+            cur.execute("""
+                SELECT EXISTS (
+                    SELECT 1 FROM information_schema.columns 
+                    WHERE table_name = 'papers' AND column_name = 'finetuned_embedding'
+                );
+            """)
+            column_exists = cur.fetchone()[0]
+
+            if column_exists:
+                cur.execute("SELECT COUNT(*) FROM papers WHERE finetuned_embedding IS NOT NULL;")
+                count = cur.fetchone()[0]
+                if count > 0:
+                    print(f"Database already contains {count} fine-tuned embeddings. Skipping embedding step.")
+                    connection.close_pool()
+                    return
+    
     device = "mps" if torch.backends.mps.is_available() else "cuda" if torch.cuda.is_available() else "cpu"
 
     checkpoint = torch.load(WEIGHTS_PATH, map_location=device)
@@ -58,8 +80,6 @@ def embed() -> None:
     model = PaperEncoder(projection_dim=projection_dim)
     model._projection.load_state_dict(state_dict)
     model.eval()
-
-    connection.init_pool()
 
     with connection.pool.connection() as conn:
         base_embeddings_dict = fetch_papers_embeddings(conn=conn)
