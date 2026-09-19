@@ -38,6 +38,18 @@ def fetch_stop_words(path: str = PATH_TO_STOP_WORDS) -> set[str]:
 def setup():
     connection.init_pool()
 
+    # check whether the data has already been injected to db
+    with connection.pool.connection() as conn:
+        init_db(conn=conn, schema_path=PATH_TO_SQL_SCHEMA)
+
+        with conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM papers;")
+            count = cur.fetchone()[0]
+            if count > 0:
+                print(f"Database already contains {count} papers. Skipping setup.")
+                connection.close_pool()
+                return
+
     # fetch arxiv_papers from public API
     arxiv_papers: list[ArxivPaper] = fetch_arxiv_papers()
 
@@ -73,8 +85,6 @@ def setup():
     idf_scores: dict[str, float] = extractor.get_idf_map()
 
     with connection.pool.connection() as conn:
-        # initialize db based on schema and load  data to it
-        init_db(conn=conn, schema_path=PATH_TO_SQL_SCHEMA)
         load_data_to_db(conn=conn, papers=arxiv_papers)
         save_idf_scores(conn=conn, idf_scores=idf_scores)
         create_index(conn=conn)
