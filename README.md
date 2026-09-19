@@ -1,368 +1,119 @@
-# Semantic Movie Search Engine
+# ArXiv RAG Engine: Autonomous Research Assistant
 
 ---
 
-# Project Overview
+## Project Overview
 
-This project implements a high-performance semantic movie search engine that moves beyond traditional keyword matching. Instead of relying solely on lexical similarity, it learns a semantic embedding space where distance represents thematic similarity between movies.
+The **ArXiv RAG Engine** is a sophisticated Retrieval-Augmented Generation system designed to provide grounded, citation-backed answers to complex scientific research questions. Unlike traditional keyword-based search engines, this system combines **high-performance C++ text processing**, **fine-tuned neural embeddings**, and **autonomous LLM agents** to navigate the vast landscape of ArXiv scientific papers.
 
-The system uses a pretrained **SentenceTransformer (`all-MiniLM-L6-v2`)** together with a custom **PyTorch projection head** trained using **Triplet Loss**. The resulting model compresses movie representations into a **128-dimensional embedding space**, allowing semantically similar films to cluster together.
-
-To maximize performance, text preprocessing is implemented in **C++** and exposed to Python through **PyBind11**, eliminating Python preprocessing bottlenecks during embedding generation.
-
-Movie embeddings are stored inside **PostgreSQL** using the **pgvector** extension, while an **IVFFlat** index enables extremely fast nearest-neighbor search.
+The engine learns a specialized semantic space where papers are clustered by conceptual and citation-level similarity rather than just shared vocabulary. It features a fully autonomous retrieval loop where the AI can iteratively refine its own search queries to find the most relevant evidence before formulating a final response.
 
 ---
 
-# Features
+## Key Features
 
-- Semantic movie search using dense vector embeddings
-- Fine-tuned projection head trained with Triplet Loss
-- High-performance C++ text preprocessing with PyBind11
-- PostgreSQL + pgvector vector database
-- IVFFlat approximate nearest-neighbor indexing
-- Dockerized infrastructure
-- Unit testing for both Python and C++ components
+### 🚀 High-Performance Architecture
+*   **C++ Accelerated Preprocessing:** Text normalization and TF-IDF keyword extraction are implemented in **C++** and exposed via **PyBind11**. This eliminates Python-level bottlenecks, enabling high-speed processing of large paper corpuses.
+*   **PostgreSQL + pgvector:** Utilizes industry-standard vector storage with **IVFFlat indexing** for sub-millisecond nearest-neighbor retrieval.
+*   **Efficient Ingestion:** Leverages PostgreSQL's `COPY` protocol for high-throughput bulk data loading.
 
----
+### 🧠 Advanced Representation Learning
+*   **Base Encoder:** Uses `allenai-specter`, a transformer specifically pretrained on scientific citations and abstracts.
+*   **Metric Learning:** Features a custom **PyTorch Projection Head** fine-tuned using **Triplet Loss**.
+*   **Deep Semantic Alignment:** The projection head is trained to minimize the distance between papers sharing significant metadata (categories, keywords, citations) while pushing unrelated papers apart.
+*   **W&B Integration:** Experiment tracking and hyperparameter optimization (lr, margin, projection_dim) are managed via **Weights & Biases (W&B) Sweeps**.
 
-# Tech Stack
-
-## Machine Learning
-
-- PyTorch
-- SentenceTransformers (HuggingFace)
-- NumPy
-
-## Data Engineering
-
-- C++
-- PyBind11
-- Pandas
-
-## Database
-
-- PostgreSQL
-- pgvector
-- psycopg_pool (`COPY FROM STDIN` streaming)
-
-## Infrastructure
-
-- Docker
-- Docker Compose
-
-## Testing
-
-- PyTest
-- Google Test
+### 🤖 Autonomous RAG Pipeline
+*   **Gemini-Powered Agent:** Integrated with the **Google Gemini API** using an **autonomous tool-calling loop**.
+*   **Self-Correcting Retrieval:** The agent can independently decide to "search again" with reformulated queries if the initial results are insufficient or irrelevant.
+*   **Grounded Generation:** Enforces strict adherence to retrieved context with mandatory numerical citations (e.g., `[1]`, `[2]`), virtually eliminating hallucinations.
+*   **Interactive CLI:** A polished command-line interface with session management and slash-commands (`/k`, `/sources`, `/help`).
 
 ---
 
-# Architecture
+## Tech Stack
 
-The project is divided into three main stages:
-
-1. Data preprocessing
-2. Model training
-3. Vector database generation and search
-
----
-
-# High-Performance Text Processing
-
-## TextNormalizer (C++ / PyBind11)
-
-Large datasets can make text preprocessing a bottleneck. Instead of cleaning text in Python, preprocessing is implemented in C++.
-
-The normalizer performs the following operations sequentially:
-
-- Removes ASCII punctuation
-- Converts text to lowercase
-- Removes stopwords using an `unordered_set` for **O(1)** lookup
-
-This significantly reduces preprocessing overhead before embedding generation.
+| Component | Technologies |
+| :--- | :--- |
+| **Language** | Python 3.10+, C++17 |
+| **Machine Learning** | PyTorch, Sentence-Transformers, NumPy |
+| **LLM / AI** | Google Gemini API (GenAI SDK) |
+| **Database** | PostgreSQL, pgvector |
+| **Bindings** | PyBind11, CMake |
+| **Experimentation** | Weights & Biases (W&B) |
+| **Infrastructure** | Docker, Docker Compose |
 
 ---
 
-# Embedding Models
+## System Architecture
 
-## MovieEmbedder
+The pipeline is organized into five distinct phases:
 
-The baseline embedding model uses the pretrained **all-MiniLM-L6-v2** SentenceTransformer.
-
-Characteristics:
-
-- Output dimension: **384**
-- Batch size: **32**
-- Frozen pretrained encoder
-- Used as the baseline semantic search model
+1.  **Ingestion:** Fetching data from the ArXiv public API and performing lexical analysis.
+2.  **Normalization:** Cleaning and tokenizing text using the C++ `TextNormalizer`.
+3.  **Representation:** Generating 768-dim SPECTER embeddings and projecting them to a learned 256-dim space.
+4.  **Indexing:** Building IVFFlat clusters in the vector database.
+5.  **Autonomous RAG:** The iterative loop where the agent retrieves context and generates answers.
 
 ---
 
-## FilmEncoder
+## Deep Dive: Metric Learning
 
-The fine-tunable model extends the pretrained encoder.
+To align the embedding space with scientific relevance, the model is trained using a **Triplet Loss** objective:
+$$L = \max(0, d(a, p) - d(a, n) + \text{margin})$$
 
-Instead of retraining the entire transformer, the encoder is frozen and a lightweight projection head is attached.
+*   **Anchor (a):** A target research paper.
+*   **Positive (p):** A paper sharing a high TF-IDF similarity score and metadata overlap.
+*   **Negative (n):** A paper with low semantic similarity.
 
-Architecture:
-
-```
-384-d embedding
-        │
-     Dropout
-    (p = 0.25)
-        │
- Linear Projection
-        │
-128-d embedding
-        │
- L2 Normalization
-```
-
-The final normalization allows cosine similarity to be computed efficiently using a dot product.
+This forces the projection head to discard surface-level linguistic noise and focus on deep scientific relationships.
 
 ---
 
-# Triplet Loss
+## Getting Started
 
-The projection head is optimized using **Triplet Loss** with a margin of **0.2**.
-
-The objective is
-
-```
-distance(anchor, positive)
-<
-distance(anchor, negative) - margin
-```
-
-which forces semantically similar movies to become closer together while pushing unrelated movies farther apart.
-
----
-
-# Triplet Mining
-
-## FilmPairDataset
-
-The dataset constructs triplets using movie metadata.
-
-Every pair of movies is assigned the following similarity score:
-
-```text
-Score = (Shared Genres × 1.5) + (Shared Keywords × 1.0)
-```
-
-These scores are used to generate positive and negative candidate pools.
-
-Negative sampling follows the hierarchy:
-
-1. Semi-hard negatives
-2. Hard negatives
-3. Easy negatives
-
-Semi-hard negatives provide the strongest learning signal and are therefore preferred whenever available.
-
----
-
-## custom_collate_fn
-
-PyTorch's default DataLoader collate function cannot handle invalid triplets.
-
-The custom collate function safely removes samples where:
-
-- no positive candidate exists
-- no negative candidate exists
-
-This prevents training crashes while keeping batch generation efficient.
-
----
-
-# Experiments
-
-Developing the metric learning model required multiple experiments to understand how triplet sampling affects embedding geometry.
-
----
-
-## Experiment 1 — Distance Matrix Feedback Loop
-
-### Hypothesis
-
-Recompute the pairwise distance matrix every three epochs so semi-hard negative mining uses the newest embeddings.
-
-### Result
-
-Failure
-
-### Analysis
-
-The updated distance matrix was generated using an almost untrained projection head.
-
-Early in training, these embeddings behave almost randomly.
-
-Rebuilding neighborhoods from unstable vectors caused the model to optimize against its own noise rather than stable metadata relationships, resulting in catastrophic collapse.
-
-### Conclusion
-
-Distance matrices should only be generated from stable embeddings, or triplet mining should be performed online.
-
----
-
-## Experiment 2 — Thresholding and Franchise Collapse
-
-### Hypothesis
-
-Restrict positive pairs using:
-
-- Score ≥ 6
-- Maximum 15 positive candidates
-
-### Result
-
-Good
-
-### Analysis
-
-Movies from the same franchise monopolized each other's candidate lists.
-
-For example:
-
-- Batman Begins
-- The Dark Knight
-- Batman Returns
-
-became isolated clusters because they were trained almost exclusively against one another.
-
-The resulting embedding space contained extremely dense franchise clusters with poorly defined global boundaries.
-
-Search quality deteriorated despite apparently successful training.
-
----
-
-## Experiment 3 — The Gray Zone
-
-### Hypothesis
-
-Negative examples should share zero genres.
-
-### Result
-
-Failure
-
-### Analysis
-
-Movies sharing even one genre were excluded from both positive and negative pools.
-
-This created a large "gray zone" where many informative samples were never used during training.
-
-The model therefore failed to learn subtle distinctions such as:
-
-- superhero action
-- generic action
-
-because generic action films never appeared as meaningful negatives.
-
-### Conclusion
-
-Relaxing the negative definition significantly improves representation learning.
-
----
-
-# Results
-
-The experiments revealed an important distinction between pretrained and fine-tuned embeddings.
-
-## Where the pretrained model excels
-
-The pretrained **all-MiniLM-L6-v2** performs extremely well when lexical similarity is already high.
-
-For example:
-
-```
-The Matrix
-↓
-The Matrix Reloaded
-↓
-The Matrix Revolutions
-```
-
-Movie descriptions naturally contain the same characters, locations and terminology, making lexical similarity sufficient.
-
----
-
-## Where the fine-tuned model excels
-
-The projection head performs much better for abstract thematic similarity.
-
-Example:
-
-```
-Inception
-```
-
-The pretrained model often retrieves generic action or sci-fi films because their overviews share similar vocabulary.
-
-The fine-tuned model instead learns to emphasize metadata relationships such as:
-
-- subconscious
-- dreams
-- reality
-- mind
-
-As a result, movies like:
-
-- Looper
-- The Cell
-
-become much closer in the learned embedding space despite sharing relatively little vocabulary.
-
-The fine-tuned model successfully captures thematic similarity rather than surface-level text similarity.
-
----
-
-# Installation
-
-## 1. Start PostgreSQL
-
+### 1. Infrastructure Setup
+Spin up the vector database using Docker:
 ```bash
 docker-compose up -d
 ```
 
----
-
-## 2. Build the C++ normalizer
-
+### 2. Build C++ Components
+Compile the accelerated preprocessing bindings:
 ```bash
+# Example for normalizer (repeat for tfidf)
 cd normalizer
+mkdir build && cd build
+cmake .. && make
+```
 
-mkdir build
-cd build
+### 3. Data Pipeline & Training
+Initialize the database and run hyperparameter sweeps:
+```bash
+# Ingest data, normalize, and load to DB
+python -m src.setup
 
-cmake ..
-make
+# Train the projection head using W&B Sweeps
+python -m src.train
+
+# Project embeddings and build vector indices
+python -m src.embed
+```
+
+### 4. Launch the Assistant
+Run the interactive CLI loop:
+```bash
+python -m src.main
 ```
 
 ---
 
-## 3. Initialize the database
+## Interactive Commands
 
-Creates the schema, enables pgvector, and loads the cleaned dataset.
+While in the CLI session, you can use the following slash-commands:
 
-```bash
-python -m src.model.setup
-```
-
----
-
-## 4. Train the projection head
-
-```bash
-python -m src.model.train
-```
-
----
-
-## 5. Generate embeddings and build the IVFFlat index
-
-```bash
-python -m src.model.main --model finetuned
-```
+*   `/k <n>`: Adjust the number of retrieved papers (e.g., `/k 10`).
+*   `/sources`: Inspect the full metadata and abstracts of the papers used in the last answer.
+*   `/clear`: Clear the terminal screen.
+*   `/help`: View the command list.
+*   `/exit`: Gracefully shut down the engine and connection pools.
