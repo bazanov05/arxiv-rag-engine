@@ -15,7 +15,7 @@ PATH_TO_SQL_SCHEMA = "./src/db/schema.sql"
 PATH_TO_STOP_WORDS = "./normalizer/data/stopwords.txt"
 
 
-def _fetch_stop_words(path: str = PATH_TO_STOP_WORDS) -> set[str]:
+def fetch_stop_words(path: str = PATH_TO_STOP_WORDS) -> set[str]:
     try:
         with open(path, "r", encoding="utf-8") as f:
             stop_words = set()
@@ -42,7 +42,7 @@ def setup():
     arxiv_papers: list[ArxivPaper] = fetch_arxiv_papers()
 
     # fetch stop words from txt file and init text normalizer
-    stop_words: set[str] = _fetch_stop_words()
+    stop_words: set[str] = fetch_stop_words()
     normalizer = TextNormalizer(stop_words)  
 
     # clean every abstract and title
