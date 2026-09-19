@@ -23,7 +23,7 @@ class RAGEngine():
             pool: ConnectionPool, 
             normalizer: TextNormalizer,
             encoder: PaperEncoder, 
-            model_name: str = "gemini-2.5-flash"
+            model_name: str = "gemini-3.6-flash"
         ):
         """Initializes the RAGEngine with database resources, neural encoders, and LLM clients.
 
